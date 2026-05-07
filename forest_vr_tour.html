@@ -252,15 +252,34 @@
     vr-mode-ui="enabled:true"
     renderer="colorManagement:true">
     <a-sky id="aframe-sky" src="" rotation="0 -90 0"></a-sky>
-    <!-- カメラリグ（スナップターン用に親エンティティでY軸回転を管理） -->
-    <a-entity id="camera-rig">
-      <a-entity camera look-controls="pointerLockEnabled:false" position="0 1.6 0"></a-entity>
+
+    <!-- 撮影地点間移動用ホットスポット格納コンテナ -->
+    <a-entity id="hotspots-container"></a-entity>
+
+    <!-- 写真情報オーバーレイテキスト（最初3秒だけ表示） -->
+    <a-entity id="info-overlay" position="0 0 -3" visible="false">
+      <a-plane width="3.6" height="0.9" color="#000" opacity="0.7" position="0 0 0"></a-plane>
+      <a-text id="info-title" value="" position="0 0.2 0.01" align="center" color="#d8e8c8"
+              width="3.4" font="kelsonsans" baseline="center"></a-text>
+      <a-text id="info-meta" value="" position="0 -0.15 0.01" align="center" color="#9ab880"
+              width="3" font="kelsonsans" baseline="center"></a-text>
     </a-entity>
-    <!-- 右コントローラー（スナップターン + Bボタン終了） -->
+
+    <!-- カメラリグ -->
+    <a-entity id="camera-rig">
+      <a-entity id="aframe-cam" camera look-controls="pointerLockEnabled:false" position="0 1.6 0">
+        <!-- 視線レイキャスター（ホットスポットクリック判定用） -->
+        <a-cursor color="#ffcc00" raycaster="objects:.hotspot" fuse="true" fuse-timeout="1500"></a-cursor>
+      </a-entity>
+    </a-entity>
+
+    <!-- 右コントローラー -->
     <a-entity id="right-ctrl"
       oculus-touch-controls="hand:right"
       snap-turn
-      vr-exit-button>
+      vr-exit-button
+      laser-controls="hand:right"
+      raycaster="objects:.hotspot;far:50">
     </a-entity>
     <!-- 左コントローラー -->
     <a-entity id="left-ctrl"
@@ -599,6 +618,23 @@ function openVRSubAll(k){vrQ=PHOTOS.filter(p=>p.sub_id===k);if(!vrQ.length)retur
 function navigateVR(d){vrI=Math.max(0,Math.min(vrQ.length-1,vrI+d));buildV(vrQ[vrI]);}
 /* ── A-Frame カスタムコンポーネント ── */
 
+// look-at コンポーネント（指定オブジェクトの方を向く）
+AFRAME.registerComponent('look-at',{
+  schema:{type:'string'},
+  init:function(){
+    this.target=null;
+  },
+  tick:function(){
+    if(!this.target){
+      this.target=document.querySelector(this.data);
+      if(!this.target||!this.target.object3D) return;
+    }
+    const targetPos=new THREE.Vector3();
+    this.target.object3D.getWorldPosition(targetPos);
+    this.el.object3D.lookAt(targetPos);
+  }
+});
+
 // スナップターン（右スティック横倒しで45度回転）
 AFRAME.registerComponent('snap-turn', {
   init: function(){
@@ -639,6 +675,167 @@ AFRAME.registerComponent('vr-exit-button', {
   }
 });
 
+// ── 2地点間の方位計算（北=0度、東=90度、時計回り） ──
+function calcBearing(lat1,lng1,lat2,lng2){
+  const toRad=d=>d*Math.PI/180, toDeg=r=>r*180/Math.PI;
+  const φ1=toRad(lat1), φ2=toRad(lat2), Δλ=toRad(lng2-lng1);
+  const y=Math.sin(Δλ)*Math.cos(φ2);
+  const x=Math.cos(φ1)*Math.sin(φ2)-Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+  let θ=toDeg(Math.atan2(y,x));
+  return (θ+360)%360;
+}
+
+// ── 2地点間の距離（m）──
+function calcDistance(lat1,lng1,lat2,lng2){
+  const R=6371000;
+  const toRad=d=>d*Math.PI/180;
+  const φ1=toRad(lat1), φ2=toRad(lat2);
+  const Δφ=toRad(lat2-lat1), Δλ=toRad(lng2-lng1);
+  const a=Math.sin(Δφ/2)**2+Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+
+// ── 現在の写真から最寄りの撮影地点を最大3つ取得（同一小班限定 or 100m以内）──
+function findNearbyPhotos(current){
+  const list=[];
+  for(const p of PHOTOS){
+    if(p.id===current.id) continue;
+    if(!p.lat||!p.lng) continue;
+    const dist=calcDistance(current.lat,current.lng,p.lat,p.lng);
+    // 200m以内のもののみ候補
+    if(dist>200) continue;
+    list.push({photo:p, distance:dist});
+  }
+  list.sort((a,b)=>a.distance-b.distance);
+  return list.slice(0,3); // 最大3つ
+}
+
+// ── ホットスポット（矢印）を生成 ──
+function buildHotspots(currentPhoto){
+  const container=document.getElementById('hotspots-container');
+  container.innerHTML='';
+  const nearby=findNearbyPhotos(currentPhoto);
+  nearby.forEach((item,i)=>{
+    const bearing=calcBearing(currentPhoto.lat,currentPhoto.lng,item.photo.lat,item.photo.lng);
+    // A-Frameでは Y軸回転 = 北を基準に時計回り（座標系は北=-Z）
+    // a-skyのrotation="0 -90 0"を踏まえて、写真の北が a-sky の正面に来るよう調整
+    // bearing 0度=北 → A-Frame y回転 = -bearing
+    const rad=(-bearing)*Math.PI/180;
+    const dist=4; // ホットスポットの配置半径(m)
+    const x=Math.sin(-rad)*dist;
+    const z=-Math.cos(-rad)*dist;
+
+    const hs=document.createElement('a-entity');
+    hs.classList.add('hotspot');
+    hs.setAttribute('position',`${x} 0 ${z}`);
+    // カメラ方向を向くようlook-at
+    hs.setAttribute('look-at','#aframe-cam');
+    hs.setAttribute('data-photo-id',item.photo.id);
+
+    // 矢印（円錐 + 円柱）
+    const arrow=document.createElement('a-entity');
+    arrow.innerHTML=`
+      <a-cone radius-bottom="0.18" radius-top="0" height="0.4" position="0 0.3 0" rotation="-90 0 0" color="#7ab450"></a-cone>
+      <a-cylinder radius="0.06" height="0.3" position="0 0 0" rotation="-90 0 0" color="#7ab450"></a-cylinder>
+      <a-ring radius-inner="0.35" radius-outer="0.45" position="0 0 -0.05" color="#a0d060" opacity="0.7"></a-ring>
+    `;
+    hs.appendChild(arrow);
+
+    // ラベル（距離表示）
+    const label=document.createElement('a-text');
+    label.setAttribute('value',`${Math.round(item.distance)}m\n→ ${item.photo.title||item.photo.id}`);
+    label.setAttribute('position','0 0.7 0');
+    label.setAttribute('align','center');
+    label.setAttribute('color','#ffffff');
+    label.setAttribute('width','3');
+    hs.appendChild(label);
+
+    // クリック/視線フューズで写真切替
+    hs.addEventListener('click', ()=>{
+      const targetIdx=afQueue.findIndex(p=>p.id===item.photo.id);
+      if(targetIdx>=0){
+        afIndex=targetIdx;
+      } else {
+        // 現在のキューになければ、新しいキューとして近隣写真を入れ直す
+        afQueue=[item.photo, ...afQueue.filter(p=>p.id!==item.photo.id)];
+        afIndex=0;
+      }
+      updateAFrameContent(item.photo);
+    });
+
+    container.appendChild(hs);
+  });
+}
+
+// ── 写真情報オーバーレイ（最初3秒だけ表示してフェードアウト）──
+let overlayTimer=null;
+function showInfoOverlay(photo){
+  const overlay=document.getElementById('info-overlay');
+  const title=document.getElementById('info-title');
+  const meta=document.getElementById('info-meta');
+  if(!overlay||!title||!meta) return;
+
+  // 小班情報を取得（樹種・林齢など）
+  let extraInfo='';
+  if(photo.sub_id && SUBS_GJ){
+    const [compId,subLbl]=photo.sub_id.split('-');
+    const subFeat=SUBS_GJ.features.find(f=>{
+      const sp=f.properties;
+      return String(sp[C.sub_comp])===compId && String(sp[C.sub_id])===subLbl;
+    });
+    if(subFeat){
+      const sp=subFeat.properties;
+      const parts=[];
+      if(sp['優占種1']) parts.push(sp['優占種1']);
+      if(sp['林齢']) parts.push(sp['林齢']+'年');
+      if(sp['林相']) parts.push(sp['林相']);
+      if(parts.length) extraInfo='　|　'+parts.join('・');
+    }
+  }
+
+  title.setAttribute('value', photo.title||photo.filename||photo.id);
+  meta.setAttribute('value',
+    `${photo.date||''} ${photo.time||''}${extraInfo}`);
+
+  // タイマークリア（連続切替対応）
+  if(overlayTimer){clearTimeout(overlayTimer);}
+  // 即座に表示（フル不透明）
+  overlay.setAttribute('visible','true');
+  overlay.setAttribute('animation__in',
+    'property: components.material.material.opacity; from: 0; to: 1; dur: 300; startEvents: showOverlay');
+  // 子要素もすべて不透明に戻す
+  document.querySelectorAll('#info-overlay a-plane, #info-overlay a-text').forEach(el=>{
+    el.removeAttribute('animation__fadeout');
+    el.setAttribute('opacity', el.tagName.toLowerCase()==='a-plane'?'0.7':'1');
+  });
+
+  // 3秒後にフェードアウト開始
+  overlayTimer=setTimeout(()=>{
+    document.querySelectorAll('#info-overlay a-plane').forEach(el=>{
+      el.setAttribute('animation__fadeout','property:opacity;from:0.7;to:0;dur:1500');
+    });
+    document.querySelectorAll('#info-overlay a-text').forEach(el=>{
+      el.setAttribute('animation__fadeout','property:opacity;from:1;to:0;dur:1500');
+    });
+    setTimeout(()=>{overlay.setAttribute('visible','false');}, 1600);
+  }, 3000);
+}
+
+// ── 写真表示の中身切替（VR内ナビ用 - VRを抜けずに切替）──
+function updateAFrameContent(photo){
+  const sky=document.getElementById('aframe-sky');
+  sky.setAttribute('src', photo.url);
+  document.getElementById('aframe-title').textContent=photo.title||photo.filename||photo.id;
+  document.getElementById('aframe-counter').textContent=
+    afQueue.length>1?`${afIndex+1} / ${afQueue.length}`:'';
+  document.getElementById('aframe-prev').disabled=afIndex===0;
+  document.getElementById('aframe-next').disabled=afIndex===afQueue.length-1;
+  // ホットスポット再生成
+  buildHotspots(photo);
+  // 情報オーバーレイ再表示
+  showInfoOverlay(photo);
+}
+
 /* ── A-Frame 没入型VRビューア ── */
 let afQueue=[], afIndex=0;
 
@@ -650,38 +847,25 @@ function enterAFrame(){
 
 function showAFrame(photo){
   const wrap=document.getElementById('aframe-wrap');
-  const sky=document.getElementById('aframe-sky');
-  const title=document.getElementById('aframe-title');
-  const counter=document.getElementById('aframe-counter');
-  // 写真URLをA-Frameの<a-sky>に設定
-  sky.setAttribute('src', photo.url);
-  title.textContent=photo.title||photo.filename||photo.id;
-  counter.textContent=afQueue.length>1?`${afIndex+1} / ${afQueue.length}`:'';
-  document.getElementById('aframe-prev').disabled=afIndex===0;
-  document.getElementById('aframe-next').disabled=afIndex===afQueue.length-1;
   // 表示
   wrap.style.display='block';
-  // A-Frameシーンに手動でVRモード開始を促す（Questでは自動でVRボタンが出る）
+  // A-Frameシーンに手動でVRモード開始を促す
   const scene=document.getElementById('aframe-scene');
-  // シーンが初期化済みであればVRモードへ
-  if(scene.hasLoaded){
+  const startVR=()=>{
     scene.enterVR().catch(e=>console.warn('enterVR:',e));
+    // シーン準備後に内容セット（ホットスポット・オーバーレイ含む）
+    setTimeout(()=>updateAFrameContent(photo), 200);
+  };
+  if(scene.hasLoaded){
+    startVR();
   } else {
-    scene.addEventListener('loaded',()=>{
-      scene.enterVR().catch(e=>console.warn('enterVR:',e));
-    },{once:true});
+    scene.addEventListener('loaded', startVR, {once:true});
   }
 }
 
 function navigateAFrame(dir){
   afIndex=Math.max(0,Math.min(afQueue.length-1,afIndex+dir));
-  // VRを維持したまま画像だけ切り替え
-  const sky=document.getElementById('aframe-sky');
-  sky.setAttribute('src',afQueue[afIndex].url);
-  document.getElementById('aframe-title').textContent=afQueue[afIndex].title||afQueue[afIndex].filename||afQueue[afIndex].id;
-  document.getElementById('aframe-counter').textContent=afQueue.length>1?`${afIndex+1} / ${afQueue.length}`:'';
-  document.getElementById('aframe-prev').disabled=afIndex===0;
-  document.getElementById('aframe-next').disabled=afIndex===afQueue.length-1;
+  updateAFrameContent(afQueue[afIndex]);
 }
 
 function closeAFrame(){
