@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://cdn.pannellum.org/2.5/pannellum.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.pannellum.org/2.5/pannellum.js"></script>
+<script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
 <style>
   :root{
     --bg:#0f1a0f;--bg2:#162016;--surface:#1f2e1f;--surface2:#263626;
@@ -243,6 +244,27 @@
 </div>
 
 <!-- VR Modal -->
+<!-- A-Frame 没入型VRシーン（普段は非表示） -->
+<div id="aframe-wrap" style="display:none;position:fixed;inset:0;z-index:3000;">
+  <a-scene id="aframe-scene"
+    embedded
+    style="width:100%;height:100%;"
+    vr-mode-ui="enabled:true"
+    renderer="colorManagement:true">
+    <a-sky id="aframe-sky" src="" rotation="0 -90 0"></a-sky>
+    <a-entity camera look-controls></a-entity>
+  </a-scene>
+  <div style="position:absolute;top:16px;right:16px;z-index:3100;display:flex;gap:8px;align-items:center;">
+    <div id="aframe-title" style="color:#fff;font-size:13px;font-weight:600;text-shadow:0 1px 4px rgba(0,0,0,.8);"></div>
+    <button onclick="closeAFrame()" style="background:rgba(30,30,30,.85);border:1px solid rgba(255,255,255,.3);color:#fff;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">✕ 閉じる</button>
+  </div>
+  <div style="position:absolute;bottom:16px;left:50%;transform:translateX(-50%);z-index:3100;display:flex;gap:10px;">
+    <button id="aframe-prev" onclick="navigateAFrame(-1)" style="background:rgba(30,30,30,.85);border:1px solid rgba(255,255,255,.3);color:#fff;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px;">← 前</button>
+    <span id="aframe-counter" style="color:#fff;font-size:12px;line-height:32px;text-shadow:0 1px 4px rgba(0,0,0,.8);"></span>
+    <button id="aframe-next" onclick="navigateAFrame(+1)" style="background:rgba(30,30,30,.85);border:1px solid rgba(255,255,255,.3);color:#fff;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px;">次 →</button>
+  </div>
+</div>
+
 <div id="vr-modal">
   <div id="vr-header">
     <div id="vr-info"><div id="vr-title">360°現地写真</div><div id="vr-meta"></div></div>
@@ -254,7 +276,7 @@
     <button class="vr-nav" id="btn-prev" onclick="navigateVR(-1)">← 前</button>
     <span id="vr-counter"></span>
     <button class="vr-nav" id="btn-next" onclick="navigateVR(+1)">次 →</button>
-    <button id="enter-xr-btn" onclick="enterVRMode()" style="display:none;margin-left:auto;background:#5060e0;border:1px solid #8090ff;color:#fff;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">
+    <button id="enter-xr-btn" onclick="enterAFrame()" style="display:none;margin-left:auto;background:#5060e0;border:1px solid #8090ff;color:#fff;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">
       🥽 VRモードで見る
     </button>
   </div>
@@ -562,49 +584,63 @@ function openVRSingle(id){const p=PHOTOS.find(x=>x.id===id);if(!p)return;vrQ=[p]
 function openVRFromSub(id,k){vrQ=PHOTOS.filter(p=>p.sub_id===k);vrI=Math.max(0,vrQ.findIndex(p=>p.id===id));document.getElementById('vr-modal').classList.add('open');buildV(vrQ[vrI]);}
 function openVRSubAll(k){vrQ=PHOTOS.filter(p=>p.sub_id===k);if(!vrQ.length)return;vrI=0;document.getElementById('vr-modal').classList.add('open');buildV(vrQ[0]);}
 function navigateVR(d){vrI=Math.max(0,Math.min(vrQ.length-1,vrI+d));buildV(vrQ[vrI]);}
-/* ── WebXR immersive-vr セッション ── */
-let xrSession=null, xrRefSpace=null, xrCanvas=null, xrCtx=null, xrImg=null;
+/* ── A-Frame 没入型VRビューア ── */
+let afQueue=[], afIndex=0;
 
-async function enterVRMode(){
-  if(!navigator.xr){alert('WebXRが利用できません。Meta Quest Browserで開いてください。');return;}
-  const supported=await navigator.xr.isSessionSupported('immersive-vr');
-  if(!supported){alert('このブラウザはimmersive-VRをサポートしていません。');return;}
-  try{
-    xrSession=await navigator.xr.requestSession('immersive-vr',{
-      requiredFeatures:['viewer','local']
-    });
-    xrSession.addEventListener('end',()=>{
-      xrSession=null;
-      document.getElementById('enter-xr-btn').textContent='🥽 VRモードで見る';
-    });
-    // Pannellumのcanvasを取得してXRに渡す
-    const panCanvas=document.querySelector('#panorama canvas');
-    if(!panCanvas){alert('パノラマが読み込まれていません。少し待ってから試してください。');xrSession.end();return;}
-    const gl=panCanvas.getContext('webgl')||panCanvas.getContext('webgl2');
-    if(!gl){xrSession.end();return;}
-    await gl.makeXRCompatible();
-    const layer=new XRWebGLLayer(xrSession,gl);
-    xrSession.updateRenderState({baseLayer:layer});
-    xrRefSpace=await xrSession.requestReferenceSpace('local');
-    document.getElementById('enter-xr-btn').textContent='⬛ VR終了';
-    xrSession.requestAnimationFrame(function xrFrame(t,frame){
-      if(!xrSession)return;
-      xrSession.requestAnimationFrame(xrFrame);
-    });
-  }catch(e){
-    console.error('WebXR error:',e);
-    alert('VRモードの起動に失敗しました: '+e.message);
+function enterAFrame(){
+  // vrQ/vrIからキューを引き継ぐ
+  afQueue=vrQ; afIndex=vrI;
+  showAFrame(afQueue[afIndex]);
+}
+
+function showAFrame(photo){
+  const wrap=document.getElementById('aframe-wrap');
+  const sky=document.getElementById('aframe-sky');
+  const title=document.getElementById('aframe-title');
+  const counter=document.getElementById('aframe-counter');
+  // 写真URLをA-Frameの<a-sky>に設定
+  sky.setAttribute('src', photo.url);
+  title.textContent=photo.title||photo.filename||photo.id;
+  counter.textContent=afQueue.length>1?`${afIndex+1} / ${afQueue.length}`:'';
+  document.getElementById('aframe-prev').disabled=afIndex===0;
+  document.getElementById('aframe-next').disabled=afIndex===afQueue.length-1;
+  // 表示
+  wrap.style.display='block';
+  // A-Frameシーンに手動でVRモード開始を促す（Questでは自動でVRボタンが出る）
+  const scene=document.getElementById('aframe-scene');
+  // シーンが初期化済みであればVRモードへ
+  if(scene.hasLoaded){
+    scene.enterVR().catch(e=>console.warn('enterVR:',e));
+  } else {
+    scene.addEventListener('loaded',()=>{
+      scene.enterVR().catch(e=>console.warn('enterVR:',e));
+    },{once:true});
   }
 }
 
+function navigateAFrame(dir){
+  afIndex=Math.max(0,Math.min(afQueue.length-1,afIndex+dir));
+  // VRを維持したまま画像だけ切り替え
+  const sky=document.getElementById('aframe-sky');
+  sky.setAttribute('src',afQueue[afIndex].url);
+  document.getElementById('aframe-title').textContent=afQueue[afIndex].title||afQueue[afIndex].filename||afQueue[afIndex].id;
+  document.getElementById('aframe-counter').textContent=afQueue.length>1?`${afIndex+1} / ${afQueue.length}`:'';
+  document.getElementById('aframe-prev').disabled=afIndex===0;
+  document.getElementById('aframe-next').disabled=afIndex===afQueue.length-1;
+}
+
+function closeAFrame(){
+  const wrap=document.getElementById('aframe-wrap');
+  const scene=document.getElementById('aframe-scene');
+  try{if(scene.is('vr-mode'))scene.exitVR();}catch(e){}
+  wrap.style.display='none';
+}
+
 function checkWebXR(){
-  const btn=document.getElementById('enter-xr-btn');
-  if(!btn) return;
-  const isQuest=navigator.userAgent.includes('Quest')||navigator.userAgent.includes('OculusBrowser');
-  if(isQuest){btn.style.display='block';return;}
   if(navigator.xr){
     navigator.xr.isSessionSupported('immersive-vr').then(supported=>{
-      btn.style.display=supported?'block':'none';
+      const btn=document.getElementById('enter-xr-btn');
+      if(btn) btn.style.display=supported?'block':'none';
     });
   }
 }
@@ -612,7 +648,6 @@ function checkWebXR(){
 function closeVR(){
   document.getElementById('vr-modal').classList.remove('open');
   if(vrV){try{vrV.destroy();}catch(e){}vrV=null;}
-  if(xrSession){try{xrSession.end();}catch(e){}xrSession=null;}
 }
 document.addEventListener('keydown',e=>{
   if(!document.getElementById('vr-modal').classList.contains('open'))return;
