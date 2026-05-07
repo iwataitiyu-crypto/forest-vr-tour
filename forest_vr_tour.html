@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>演習林 VR フィールドツアー</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://cdn.pannellum.org/2.5/pannellum.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.pannellum.org/2.5/pannellum.js"></script>
+<style>
+  :root{
+    --bg:#0f1a0f;--bg2:#162016;--surface:#1f2e1f;--surface2:#263626;
+    --border:rgba(120,180,80,.18);--accent:#7ab450;--accent2:#4e8a28;
+    --text:#d8e8c8;--text2:#9ab880;--text3:#6a8860;
+    --panel-w:340px;--hdr:52px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:'Noto Sans JP',sans-serif;font-size:14px;}
+
+  /* ── Header ── */
+  header{position:fixed;top:0;left:0;right:0;height:var(--hdr);background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;padding:0 16px;z-index:1000;}
+  .logo{width:28px;height:28px;border-radius:6px;background:var(--accent2);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .logo svg{width:16px;height:16px;fill:#d8e8c8;}
+  header h1{font-size:15px;font-weight:600;color:var(--text);white-space:nowrap;}
+  .sub{font-size:11px;color:var(--text3);white-space:nowrap;}
+  .hdr-sep{width:1px;height:24px;background:var(--border);margin:0 4px;flex-shrink:0;}
+  .breadcrumb{font-size:12px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .breadcrumb span{color:var(--accent);font-weight:500;}
+
+  /* ── 地図切替ボタン（ヘッダー内） ── */
+  .tile-btns{display:flex;gap:4px;margin-left:auto;flex-shrink:0;}
+  .tile-btn{background:var(--surface);border:1px solid var(--border);color:var(--text2);font-size:11px;padding:4px 10px;border-radius:5px;cursor:pointer;transition:.15s;white-space:nowrap;}
+  .tile-btn:hover{background:var(--surface2);}
+  .tile-btn.active{background:var(--accent2);border-color:var(--accent);color:#d8e8c8;}
+  .legend-toggle{background:var(--surface);border:1px solid var(--border);color:var(--text2);font-size:11px;padding:4px 10px;border-radius:5px;cursor:pointer;flex-shrink:0;}
+  .legend-toggle:hover{background:var(--surface2);}
+
+  /* ── Layout ── */
+  #main{position:fixed;top:var(--hdr);left:0;right:0;bottom:0;display:flex;}
+  #map-wrap{flex:1;position:relative;}
+  #map{width:100%;height:100%;background:#0f1a0f;}
+  #panel{width:var(--panel-w);background:var(--bg2);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;transition:width .3s;}
+  #panel.collapsed{width:0;}
+  .panel-inner{width:var(--panel-w);overflow-y:auto;flex:1;}
+
+  /* ── Legend ── */
+  #legend{position:absolute;top:12px;left:12px;z-index:800;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;min-width:150px;}
+  #legend h4{font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px;}
+  .leg-row{display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:12px;color:var(--text2);}
+  .leg-sw{width:20px;height:12px;border-radius:3px;}
+
+  /* ── Hint ── */
+  .hint{padding:32px 20px;text-align:center;}
+  .hint .icon{width:52px;height:52px;border-radius:14px;background:var(--surface);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;}
+  .hint .icon svg{width:26px;height:26px;stroke:var(--text3);fill:none;stroke-width:1.5;}
+  .hint h3{font-size:14px;font-weight:600;color:var(--text2);margin-bottom:8px;}
+  .hint p{font-size:12px;color:var(--text3);line-height:1.7;}
+
+  /* ── Compartment header ── */
+  .comp-header{padding:16px 20px 12px;border-bottom:1px solid var(--border);}
+  .badge{display:inline-block;background:var(--accent2);color:#d8e8c8;font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px;margin-bottom:6px;}
+  .comp-header h3{font-size:15px;font-weight:600;margin-bottom:3px;}
+  .comp-header p{font-size:12px;color:var(--text3);line-height:1.5;}
+
+  /* ── Sub list ── */
+  .sub-list{padding:8px 12px;}
+  .sub-item{background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:7px;overflow:hidden;cursor:pointer;transition:border-color .15s,background .15s;}
+  .sub-item:hover{border-color:var(--accent);background:var(--surface2);}
+  .sub-item.has-photos{border-color:rgba(120,180,80,.4);}
+  /* 選択中の小班はパネル内でもハイライト */
+  .sub-item.selected{border-color:#e05050;background:rgba(200,50,50,.12);}
+  .sub-item-head{display:flex;align-items:center;gap:10px;padding:9px 12px;}
+  .sub-num{min-width:28px;height:28px;border-radius:5px;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:var(--text2);}
+  .sub-item.selected .sub-num{background:rgba(200,50,50,.3);color:#f08080;}
+  .sub-info{flex:1;min-width:0;}
+  .sub-info strong{display:block;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .sub-info span{font-size:11px;color:var(--text3);}
+  .photo-badge{font-size:10px;background:rgba(120,180,80,.2);color:var(--accent);border:1px solid rgba(120,180,80,.35);padding:2px 6px;border-radius:4px;white-space:nowrap;}
+  .sub-body{padding:0 12px 12px;display:none;border-top:1px solid var(--border);}
+  .sub-body.open{display:block;}
+  .sub-body table{width:100%;border-collapse:collapse;margin-top:8px;}
+  .sub-body td{font-size:11px;padding:3px 0;color:var(--text3);border-bottom:1px solid var(--border);}
+  .sub-body td:first-child{color:var(--text2);font-weight:500;padding-right:10px;white-space:nowrap;width:90px;}
+  .photo-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;}
+  .photo-thumb{border-radius:6px;overflow:hidden;aspect-ratio:2/1;position:relative;cursor:pointer;background:var(--surface2);border:1px solid var(--border);transition:.15s;}
+  .photo-thumb:hover{border-color:var(--accent);}
+  .photo-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+  .thumb-label{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,.7));padding:10px 5px 3px;font-size:10px;color:#fff;}
+  .vr-btn{margin-top:7px;width:100%;padding:7px;background:var(--accent2);border:none;border-radius:6px;color:#d8e8c8;font-size:12px;font-weight:600;cursor:pointer;transition:.15s;}
+  .vr-btn:hover{background:var(--accent);}
+
+  /* ── Loading / Error ── */
+  #loading{position:fixed;inset:0;background:var(--bg);z-index:5000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;}
+  .spinner{width:36px;height:36px;border:3px solid var(--surface);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  #loading p{color:var(--text3);font-size:13px;}
+  #loading.done{display:none;}
+  #err{display:none;position:fixed;top:var(--hdr);left:0;right:0;background:rgba(180,60,60,.9);color:#fff;padding:10px 20px;font-size:13px;z-index:3000;}
+  #err.show{display:block;}
+
+  /* ── Leaflet overrides ── */
+  .leaflet-container{background:#0f1a0f;}
+  .leaflet-control-zoom a{background:var(--bg2)!important;color:var(--text2)!important;border-color:var(--border)!important;}
+  .leaflet-popup-content-wrapper{background:var(--bg2);border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.6);color:var(--text);}
+  .leaflet-popup-tip{background:var(--bg2);}
+  .leaflet-popup-content{margin:12px 14px;}
+  .mp h4{font-size:13px;font-weight:600;margin-bottom:4px;}
+  .mp p{font-size:11px;color:var(--text3);margin-bottom:8px;}
+  .mp button{background:var(--accent2);border:none;color:#d8e8c8;font-size:12px;font-weight:600;padding:5px 12px;border-radius:5px;cursor:pointer;}
+
+  /* ── VR Modal ── */
+  #vr-modal{display:none;position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.95);flex-direction:column;}
+  #vr-modal.open{display:flex;}
+  #vr-header{display:flex;align-items:center;gap:12px;padding:10px 18px;background:rgba(15,26,15,.95);border-bottom:1px solid var(--border);flex-shrink:0;}
+  #vr-info{flex:1;}
+  #vr-title{font-size:14px;font-weight:600;}
+  #vr-meta{font-size:11px;color:var(--text3);}
+  .vr-close{background:var(--surface);border:1px solid var(--border);color:var(--text2);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;}
+  .vr-close:hover{background:var(--surface2);color:var(--text);}
+  #panorama{flex:1;}
+  #vr-footer{padding:8px 18px;background:rgba(15,26,15,.95);border-top:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0;}
+  #vr-counter{font-size:12px;color:var(--text3);}
+  .vr-nav{background:var(--surface);border:1px solid var(--border);color:var(--text2);padding:5px 14px;border-radius:6px;cursor:pointer;font-size:12px;}
+  .vr-nav:hover{background:var(--surface2);}
+  .vr-nav:disabled{opacity:.3;cursor:default;}
+  #quest-hint{margin-left:auto;font-size:11px;color:var(--text3);}
+
+  /* ── 小班ハイライト pulse アニメ ── */
+  @keyframes subPulse{
+    0%{fill-opacity:.55;stroke-opacity:1;}
+    50%{fill-opacity:.85;stroke-opacity:1;}
+    100%{fill-opacity:.55;stroke-opacity:1;}
+  }
+  .sub-highlight path{animation:subPulse 1.2s ease-in-out infinite;}
+
+  /* ── 透明度スライダーパネル ── */
+  #opacity-ctrl{
+    position:absolute;bottom:24px;left:12px;z-index:800;
+    background:var(--bg2);border:1px solid var(--border);border-radius:10px;
+    padding:12px 14px;width:220px;
+  }
+  #opacity-ctrl .oc-title{font-size:10px;font-weight:600;color:var(--text3);letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px;}
+  .oc-row{margin-bottom:8px;}
+  .oc-row:last-child{margin-bottom:0;}
+  .oc-label{font-size:11px;color:var(--text2);display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;}
+  .oc-label span{color:var(--accent);font-weight:600;min-width:34px;text-align:right;}
+  .oc-slider{width:100%;cursor:pointer;display:block;height:4px;border-radius:2px;}
+  .oc-slider.comp{accent-color:#7ab450;}
+  .oc-slider.sub {accent-color:#4090e0;}
+  .oc-slider.road{accent-color:#ff4422;}
+  .oc-slider.photo{accent-color:#a0e060;}
+
+  /* ── ローカル写真プレビューボタン ── */
+  #local-photo-btn{
+    position:absolute;top:12px;right:12px;z-index:800;
+    background:var(--accent2);border:1px solid var(--accent);
+    color:#d8e8c8;font-size:12px;font-weight:600;
+    padding:7px 14px;border-radius:8px;cursor:pointer;
+    display:flex;align-items:center;gap:6px;transition:.15s;
+    box-shadow:0 2px 8px rgba(0,0,0,.4);
+  }
+  #local-photo-btn:hover{background:var(--accent);}
+  #local-photo-input{display:none;}
+  /* 赤いプレビューマーカー（ローカル写真） */
+  .preview-marker div{border-color:#ff6666!important;}
+
+  @media(max-width:700px){
+    :root{--panel-w:100vw;}
+    #panel{position:fixed;bottom:0;left:0;right:0;top:auto;height:58vh;width:100%!important;border-left:none;border-top:1px solid var(--border);}
+    #panel.collapsed{height:0;}
+    .tile-btns{display:none;}
+  }
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+<div id="loading"><div class="spinner"></div><p id="lmsg">データを読み込み中...</p></div>
+<div id="err"></div>
+
+<header>
+  <div class="logo"><svg viewBox="0 0 20 20"><path d="M10 2L3 6v4c0 4 3.5 7.5 7 8.5 3.5-1 7-4.5 7-8.5V6L10 2z"/></svg></div>
+  <div><h1>演習林 VRフィールドツアー</h1><div class="sub">宮崎大学農学部附属演習林</div></div>
+  <div class="hdr-sep"></div>
+  <div class="breadcrumb"><span id="bc">林班を選択してください</span></div>
+
+  <!-- ★ 地図切替ボタン -->
+  <div class="tile-btns">
+    <button class="tile-btn active" id="btn-std" onclick="setTile('std')">地図</button>
+    <button class="tile-btn" id="btn-photo" onclick="setTile('photo')">航空写真</button>
+    <button class="tile-btn" id="btn-none" onclick="setTile('none')">なし</button>
+  </div>
+  <button class="legend-toggle" onclick="toggleLegend()">凡例</button>
+</header>
+
+<div id="main">
+  <div id="map-wrap">
+    <div id="map"></div>
+    <div id="opacity-ctrl">
+      <div class="oc-title">レイヤ透明度</div>
+      <div class="oc-row">
+        <div class="oc-label">林班 <span id="val-comp">70%</span></div>
+        <input class="oc-slider comp" type="range" min="0" max="100" value="70" oninput="setLayerOpacity('comp',this.value)">
+      </div>
+      <div class="oc-row">
+        <div class="oc-label">小班 <span id="val-sub">100%</span></div>
+        <input class="oc-slider sub" type="range" min="0" max="100" value="100" oninput="setLayerOpacity('sub',this.value)">
+      </div>
+      <div class="oc-row">
+        <div class="oc-label">林道 <span id="val-road">100%</span></div>
+        <input class="oc-slider road" type="range" min="0" max="100" value="100" oninput="setLayerOpacity('road',this.value)">
+      </div>
+      <div class="oc-row">
+        <div class="oc-label">360°写真 <span id="val-photo">100%</span></div>
+        <input class="oc-slider photo" type="range" min="0" max="100" value="100" oninput="setPhotoOpacity(this.value)">
+      </div>
+    </div>
+    <!-- ローカル360°写真プレビューボタン -->
+    <button id="local-photo-btn" onclick="document.getElementById('local-photo-input').click()">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
+      ローカル写真を追加
+    </button>
+    <input type="file" id="local-photo-input" accept=".jpg,.jpeg" multiple onchange="loadLocalPhotos(this.files)">
+    <div id="legend">
+      <h4>凡例</h4>
+      <div class="leg-row"><div class="leg-sw" style="background:rgba(120,180,60,.4);border:1px solid rgba(120,180,60,.7)"></div>林班</div>
+      <div class="leg-row"><div class="leg-sw" style="background:rgba(80,140,200,.3);border:1px solid rgba(80,140,200,.6)"></div>小班</div>
+      <div class="leg-row"><div class="leg-sw" style="background:rgba(200,80,60,.6);border:1px solid rgba(200,80,60,.9);height:4px"></div>林道</div>
+      <div class="leg-row"><div style="width:20px;height:20px;border-radius:50%;background:rgba(120,200,60,.9);display:flex;align-items:center;justify-content:center;"><svg width="10" height="10" fill="white" viewBox="0 0 20 20"><circle cx="10" cy="8" r="4.5"/><path d="M10 12.5l-3.5 6h7z"/></svg></div>360°写真</div>
+      <div class="leg-row"><div class="leg-sw" style="background:rgba(220,50,50,.6);border:1px solid rgba(220,50,50,.9)"></div>選択中小班</div>
+    </div>
+  </div>
+
+  <div id="panel">
+    <div class="panel-inner" id="pc">
+      <div class="hint">
+        <div class="icon"><svg viewBox="0 0 24 24"><path d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7M9 20l6-3M9 20V7m6 13l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 16V4M9 7l6-3"/></svg></div>
+        <h3>地図から林班を選択</h3>
+        <p>林班ポリゴンをクリックすると小班一覧・研究情報・現地360°写真を閲覧できます。<br><br>小班を選択すると地図上で赤くハイライトされます。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- VR Modal -->
+<div id="vr-modal">
+  <div id="vr-header">
+    <div id="vr-info"><div id="vr-title">360°現地写真</div><div id="vr-meta"></div></div>
+    <span id="quest-hint">🥽 Quest 3のブラウザでVRモード対応</span>
+    <button class="vr-close" onclick="closeVR()">✕ 閉じる</button>
+  </div>
+  <div id="panorama"></div>
+  <div id="vr-footer">
+    <button class="vr-nav" id="btn-prev" onclick="navigateVR(-1)">← 前</button>
+    <span id="vr-counter"></span>
+    <button class="vr-nav" id="btn-next" onclick="navigateVR(+1)">次 →</button>
+  </div>
+</div>
+
+<script>
+/* ══════════════════════════════════
+   設定エリア
+   ══════════════════════════════════ */
+const C={
+  photos:"photos.json", comps:"compartments.geojson",
+  subs:"subcompartments.geojson", roads:"roads.geojson",
+  center:[31.856,131.291], zoom:14,
+  comp_id:"林班", comp_name:"基本計画区", comp_area:"area",
+  sub_comp:"林班", sub_id:"小班", sub_zone:"基本計画区",
+  sub_type:"地種", sub_area:"林地（HA）",
+};
+/* ════════════════════════════════== */
+
+let PHOTOS=[], SUBS_GJ=null, map;
+let selectedComp=null, selectedSubKey=null;
+const compLayers={};
+// 小班ごとのLeafletレイヤ（ハイライト用）
+const subLayers={};
+// 現在のハイライトレイヤ
+let hlLayer=null;
+// タイルレイヤ参照
+let tileStd=null, tilePhoto=null, currentTile='std';
+
+/* ── ユーティリティ ── */
+const lmsg=s=>document.getElementById('lmsg').textContent=s;
+const doneLoad=()=>document.getElementById('loading').classList.add('done');
+const showErr=m=>{const e=document.getElementById('err');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),8000);};
+const fj=async u=>{const r=await fetch(u);if(!r.ok)throw new Error(`${u}: HTTP ${r.status}`);return r.json();};
+
+/* ── データ読み込み ── */
+async function loadAll(){
+  try{
+    lmsg("写真データを読み込み中...");  PHOTOS=await fj(C.photos);
+    lmsg("林班データを読み込み中...");  const comps=await fj(C.comps);
+    lmsg("小班データを読み込み中...");  SUBS_GJ=await fj(C.subs);
+    lmsg("林道データを読み込み中...");
+    let roads=null;
+    try{roads=await fj(C.roads);}catch(e){console.warn("林道スキップ");}
+    lmsg("地図を描画中..."); initMap(comps,roads); doneLoad();
+  }catch(e){
+    console.error(e);
+    showErr("読み込みエラー: "+e.message+" — ファイルをHTMLと同じフォルダに置いてください");
+    doneLoad();
+  }
+}
+
+/* ── 地図初期化 ── */
+function initMap(comps,roads){
+  map=L.map('map',{center:C.center,zoom:C.zoom});
+
+  // タイルレイヤ2種
+  tileStd=L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',
+    {attribution:'© 国土地理院',maxZoom:18,minZoom:8}).addTo(map);
+  tilePhoto=L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg',
+    {attribution:'© 国土地理院',maxZoom:18,minZoom:8});
+  // 初期は地図のみ表示
+
+  // 小班レイヤ（背面・薄い青）+ 個別レイヤ保持
+  SUBS_GJ.features.forEach(f=>{
+    const sp=f.properties;
+    const id=String(sp[C.sub_comp]||"");
+    const lbl=String(sp[C.sub_id]||"");
+    const key=`${id}-${lbl}`;
+    const layer=L.geoJSON(f,{
+      style:{fillColor:'#3878c0',fillOpacity:.12,color:'#2468c0',weight:2},
+      interactive:false
+    }).addTo(map);
+    subLayers[key]=layer;
+  });
+
+  // 小班レイヤをまとめてスライダー登録
+  Object.values(subLayers).forEach(layer=>{
+    gisLayerList.push({layer, baseStroke:1, baseFill:0.12, type:'sub'});
+  });
+
+  // 林道
+  if(roads){
+    const roadLayer=L.geoJSON(roads,{style:{color:'#ff2200',weight:3,opacity:.85},interactive:false}).addTo(map);
+    gisLayerList.push({layer:roadLayer, baseStroke:.85, baseFill:0, type:'road'});
+  }
+
+  // 林班（クリッカブル）
+  const compGeoLayer=L.geoJSON(comps,{
+    style:()=>({fillColor:'#7ab450',fillOpacity:.25,color:'#2a7010',weight:3}),
+    onEachFeature:(f,layer)=>{
+      const id=String(f.properties[C.comp_id]||"");
+      compLayers[id]=layer;
+      layer.on('click',()=>selectComp(f.properties,layer));
+      layer.on('mouseover',function(){if(selectedComp!==id)this.setStyle({fillOpacity:.38,weight:3.5});});
+      layer.on('mouseout',function(){if(selectedComp!==id)this.setStyle({fillOpacity:.25,weight:3});});
+      const center=layer.getBounds().getCenter();
+      L.marker(center,{
+        icon:L.divIcon({className:'',
+          html:`<div style="background:rgba(15,26,15,.8);color:#9ab880;font-size:11px;font-weight:600;padding:2px 5px;border-radius:4px;border:1px solid rgba(120,180,60,.3)">${id}</div>`,
+          iconAnchor:[10,8]}),
+        interactive:false
+      }).addTo(map);
+    }
+  }).addTo(map);
+  gisLayerList.push({layer:compGeoLayer, baseStroke:1, baseFill:0.25, type:'comp'});
+
+  // 360°写真マーカー
+  const icon=L.divIcon({className:'',
+    html:`<div style="width:22px;height:22px;background:rgba(120,200,60,.92);border:2px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,.5);cursor:pointer;">
+      <svg width="11" height="11" fill="white" viewBox="0 0 20 20"><circle cx="10" cy="8" r="4.5"/><path d="M10 12.5l-3.5 6h7z"/></svg></div>`,
+    iconAnchor:[11,11]});
+  PHOTOS.forEach(ph=>{
+    if(!ph.lat||!ph.lng)return;
+    const m=L.marker([ph.lat,ph.lng],{icon}).addTo(map);
+    photoMarkers.push(m);
+    m.bindPopup(`<div class="mp"><h4>📷 ${ph.title||ph.id}</h4>
+      <p>${ph.date||''} ${ph.time||''}<br>GPS: ${ph.lat.toFixed(5)}, ${ph.lng.toFixed(5)}</p>
+      <button onclick="openVRSingle('${ph.id}')">🥽 VRで閲覧</button></div>`,{closeButton:false});
+  });
+
+  // スライダー初期値を即時適用（comp=70%、sub/road=100%）
+  setTimeout(()=>{
+    setLayerOpacity('comp',70);
+    setLayerOpacity('sub',100);
+    setLayerOpacity('road',100);
+    setLayerOpacity('photo',100);
+  },100);
+
+  try{const b=L.geoJSON(comps).getBounds();if(b.isValid())map.fitBounds(b,{padding:[30,30]});}catch(e){}
+  window.addEventListener('resize',()=>map.invalidateSize());
+}
+
+/* ── ★ タイル切替 ── */
+function setTile(mode){
+  if(mode===currentTile)return;
+  // 現在のタイルをすべて除去
+  if(tileStd) map.removeLayer(tileStd);
+  if(tilePhoto) map.removeLayer(tilePhoto);
+  if(mode==='std') tileStd.addTo(map);
+  else if(mode==='photo') tilePhoto.addTo(map);
+  // 'none' は何も追加しない
+  currentTile=mode;
+  // ボタン状態更新
+  ['std','photo','none'].forEach(t=>{
+    document.getElementById('btn-'+t).classList.toggle('active',t===mode);
+  });
+}
+
+/* ── 林班選択 ── */
+function selectComp(props,layer){
+  if(selectedComp&&compLayers[selectedComp])
+    compLayers[selectedComp].setStyle({fillOpacity:.25,weight:3,fillColor:'#7ab450'});
+  // 小班ハイライトをリセット
+  clearSubHighlight();
+  const id=String(props[C.comp_id]||"");
+  selectedComp=id;
+  layer.setStyle({fillOpacity:.48,weight:3.5,fillColor:'#a0d060'});
+  document.getElementById('bc').textContent=`林班 ${id}`;
+
+  const subs=SUBS_GJ.features.filter(f=>String(f.properties[C.sub_comp]||"")===id);
+  const cPhotos=PHOTOS.filter(p=>p.sub_id&&p.sub_id.startsWith(id+'-'));
+  const areaTxt=props[C.comp_area]?(Number(props[C.comp_area])/10000).toFixed(1)+' ha':'';
+
+  let html=`<div class="comp-header">
+    <div class="badge">林班 ${id}</div>
+    <h3>${props[C.comp_name]||''}</h3>
+    <p>小班 ${subs.length}件　写真 ${cPhotos.length}枚　${areaTxt}</p>
+  </div>
+  <div style="padding:8px 12px 2px;font-size:11px;color:var(--text3);">小班一覧（クリックで地図上にハイライト・展開）</div>
+  <div class="sub-list">`;
+
+  if(!subs.length) html+=`<div style="padding:12px;font-size:12px;color:var(--text3);">小班データなし</div>`;
+
+  subs.forEach(f=>{
+    const sp=f.properties;
+    const lbl=String(sp[C.sub_id]||"");
+    const key=`${id}-${lbl}`;
+    const photos=PHOTOS.filter(p=>p.sub_id===key);
+    const hasP=photos.length>0;
+
+    const topFields=[
+      ["地種",sp["地種"]],
+      ["優占種",sp["優占種1"]],
+      ["林齢",sp["林齢"]!=null?sp["林齢"]+"年":null],
+      ["林種",sp["林種"]],
+      ["林相",sp["林相"]],
+      ["面積",sp["林地（HA）"]!=null?sp["林地（HA）"]+" ha":null],
+      ["蓄積/ha",sp["蓄積_HA"]],
+      ["試験地",sp["試験地名"]],
+      ["施業計画",sp["第7次施業"]],
+    ].filter(([,v])=>v!=null&&v!==''&&v!==0&&v!=='0');
+
+    const skipTop=new Set(["地種","優占種1","林齢","林種","林相","林地（HA）","蓄積_HA","試験地名","第7次施業",
+      C.sub_comp,"小班ID","fid","FID","area","枝番","試験地有無","施業内容","2024keikak","2025",
+      "歩合1","歩合2","歩合3","優占種2","優占種3","除地（HA）"]);
+    const extraRows=Object.entries(sp)
+      .filter(([k,v])=>!skipTop.has(k)&&v!=null&&v!==''&&v!==0)
+      .map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+    const topRows=topFields.map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+
+    html+=`<div class="sub-item${hasP?' has-photos':''}" id="si-${key}" onclick="selectSub('${key}')">
+      <div class="sub-item-head">
+        <div class="sub-num">${lbl}</div>
+        <div class="sub-info">
+          <strong>${sp["優占種1"]||sp[C.sub_zone]||sp[C.sub_type]||lbl}　${sp["林齢"]!=null?sp["林齢"]+"年":''}</strong>
+          <span>${sp["林地（HA）"]!=null?sp["林地（HA）"]+' ha':''} ${sp["林相"]?'/ '+sp["林相"]:''}</span>
+        </div>
+        ${hasP?`<div class="photo-badge">📷 ${photos.length}</div>`:''}
+      </div>
+      <div class="sub-body" id="s-${key}">
+        <table>${topRows}${extraRows}</table>
+        ${hasP?`
+          <div style="margin-top:10px;font-size:11px;color:var(--text3);margin-bottom:5px;">現地360°写真 (${photos.length}枚)</div>
+          <div class="photo-grid">${photos.map(p=>`
+            <div class="photo-thumb" onclick="event.stopPropagation();openVRFromSub('${p.id}','${key}')">
+              <img src="${p.url}" alt="${p.title||p.id}" loading="lazy">
+              <div class="thumb-label">${p.title||p.filename||p.id}</div>
+            </div>`).join('')}
+          </div>
+          <button class="vr-btn" onclick="event.stopPropagation();openVRSubAll('${key}')">🥽 この小班の写真をVRで閲覧（${photos.length}枚）</button>`:''}
+      </div>
+    </div>`;
+  });
+
+  html+=`</div>`;
+  document.getElementById('pc').innerHTML=html;
+  document.getElementById('panel').classList.remove('collapsed');
+}
+
+/* ── ★ 小班選択（ハイライト + 展開） ── */
+function selectSub(key){
+  // 前の選択解除
+  if(selectedSubKey){
+    const prev=document.getElementById('si-'+selectedSubKey);
+    if(prev) prev.classList.remove('selected');
+    // 小班ボディは閉じない（同じキーなら展開/折りたたみをトグル）
+  }
+
+  const isSame=(selectedSubKey===key);
+
+  // 地図ハイライト
+  clearSubHighlight();
+
+  if(!isSame){
+    selectedSubKey=key;
+    // パネル内選択スタイル
+    const el=document.getElementById('si-'+key);
+    if(el) el.classList.add('selected');
+    // ボディを開く
+    const body=document.getElementById('s-'+key);
+    if(body) body.classList.add('open');
+    // 地図上でハイライト
+    highlightSub(key);
+    // 地図をその小班にフォーカス
+    if(subLayers[key]) map.fitBounds(subLayers[key].getBounds(),{padding:[60,60],maxZoom:17});
+  } else {
+    // 同じ小班をもう一度クリック→選択解除（ボディはトグル）
+    selectedSubKey=null;
+    const body=document.getElementById('s-'+key);
+    if(body) body.classList.toggle('open');
+  }
+}
+
+function highlightSub(key){
+  if(!subLayers[key]) return;
+  // ハイライト用に別レイヤを前面に追加
+  hlLayer=L.geoJSON(subLayers[key].toGeoJSON(),{
+    style:{
+      fillColor:'#e03030',
+      fillOpacity:.55,
+      color:'#ff4444',
+      weight:2.5,
+    },
+    className:'sub-highlight'
+  }).addTo(map);
+}
+
+function clearSubHighlight(){
+  if(hlLayer){map.removeLayer(hlLayer);hlLayer=null;}
+  selectedSubKey=null;
+}
+
+function toggleSub(k){document.getElementById('s-'+k).classList.toggle('open');}
+
+/* ── VRビューア ── */
+let vrV=null,vrQ=[],vrI=0;
+function buildV(p){
+  if(vrV){try{vrV.destroy();}catch(e){}vrV=null;}
+  vrV=pannellum.viewer('panorama',{
+    type:'equirectangular',panorama:p.url,autoLoad:true,
+    autoRotate:-2,compass:true,northOffset:p.compass||0,
+    hfov:100,showControls:true,showFullscreenCtrl:true
+  });
+  document.getElementById('vr-title').textContent=p.title||p.filename||p.id;
+  document.getElementById('vr-meta').textContent=
+    `${p.date||''} ${p.time||''}　GPS: ${(p.lat||0).toFixed(5)}, ${(p.lng||0).toFixed(5)}`;
+  document.getElementById('vr-counter').textContent=vrQ.length>1?`${vrI+1} / ${vrQ.length}`:'';
+  document.getElementById('btn-prev').disabled=vrI===0;
+  document.getElementById('btn-next').disabled=vrI===vrQ.length-1;
+}
+function openVRSingle(id){const p=PHOTOS.find(x=>x.id===id);if(!p)return;vrQ=[p];vrI=0;document.getElementById('vr-modal').classList.add('open');buildV(p);if(map)map.closePopup();}
+function openVRFromSub(id,k){vrQ=PHOTOS.filter(p=>p.sub_id===k);vrI=Math.max(0,vrQ.findIndex(p=>p.id===id));document.getElementById('vr-modal').classList.add('open');buildV(vrQ[vrI]);}
+function openVRSubAll(k){vrQ=PHOTOS.filter(p=>p.sub_id===k);if(!vrQ.length)return;vrI=0;document.getElementById('vr-modal').classList.add('open');buildV(vrQ[0]);}
+function navigateVR(d){vrI=Math.max(0,Math.min(vrQ.length-1,vrI+d));buildV(vrQ[vrI]);}
+function closeVR(){document.getElementById('vr-modal').classList.remove('open');if(vrV){try{vrV.destroy();}catch(e){}vrV=null;}}
+document.addEventListener('keydown',e=>{
+  if(!document.getElementById('vr-modal').classList.contains('open'))return;
+  if(e.key==='Escape')closeVR();
+  if(e.key==='ArrowRight')navigateVR(+1);
+  if(e.key==='ArrowLeft')navigateVR(-1);
+});
+function toggleLegend(){const e=document.getElementById('legend');e.style.display=e.style.display==='none'?'':'none';}
+
+// 360°写真マーカーリスト（透明度スライダー用）
+const photoMarkers=[];
+
+function setPhotoOpacity(val){
+  const v=Number(val);
+  document.getElementById('val-photo').textContent=v+'%';
+  const op=v/100;
+  photoMarkers.forEach(m=>{
+    const el=m.getElement();
+    if(el) el.style.opacity=op;
+  });
+}
+
+// ── EXIF GPS読み取り（バイナリ解析）──
+function readExifGPS(buffer){
+  const view=new DataView(buffer);
+  if(view.getUint16(0)!==0xFFD8) return null; // not JPEG
+  let offset=2;
+  while(offset<view.byteLength-2){
+    const marker=view.getUint16(offset);
+    if(marker===0xFFE1){ // APP1 (Exif)
+      const len=view.getUint16(offset+2);
+      const exifStart=offset+4;
+      // "Exif  " チェック
+      if(view.getUint32(exifStart)!==0x45786966) break;
+      const tiffStart=exifStart+6;
+      const le=view.getUint16(tiffStart)===0x4949;
+      const get16=(o)=>le?view.getUint16(tiffStart+o,true):view.getUint16(tiffStart+o,false);
+      const get32=(o)=>le?view.getUint32(tiffStart+o,true):view.getUint32(tiffStart+o,false);
+      const ifd0=get32(4);
+      const numEntries=get16(ifd0);
+      let gpsOffset=null;
+      for(let i=0;i<numEntries;i++){
+        const e=ifd0+2+i*12;
+        const tag=get16(e);
+        if(tag===0x8825){ gpsOffset=get32(e+8); break; }
+      }
+      if(gpsOffset===null) return null;
+      const numGPS=get16(gpsOffset);
+      const gpsData={};
+      for(let i=0;i<numGPS;i++){
+        const e=gpsOffset+2+i*12;
+        const tag=get16(e);
+        const type=get16(e+2);
+        const count=get32(e+4);
+        const valOffset=get32(e+8);
+        if(type===5){ // RATIONAL
+          const readRat=(o)=>{
+            const num=le?view.getUint32(tiffStart+o,true):view.getUint32(tiffStart+o,false);
+            const den=le?view.getUint32(tiffStart+o+4,true):view.getUint32(tiffStart+o+4,false);
+            return den?num/den:0;
+          };
+          if(count===3){
+            gpsData[tag]=[readRat(valOffset),readRat(valOffset+8),readRat(valOffset+16)];
+          }
+        } else if(type===2){ // ASCII
+          let s='';
+          const base=count<=4?e+8:tiffStart+valOffset;
+          for(let j=0;j<count-1;j++) s+=String.fromCharCode(view.getUint8(base+j));
+          gpsData[tag]=s;
+        }
+      }
+      // tag 1=LatRef, 2=Lat, 3=LonRef, 4=Lon
+      if(!gpsData[2]||!gpsData[4]) return null;
+      const dms2dec=([d,m,s])=>d+m/60+s/3600;
+      let lat=dms2dec(gpsData[2]);
+      let lng=dms2dec(gpsData[4]);
+      if(gpsData[1]==='S') lat=-lat;
+      if(gpsData[3]==='W') lng=-lng;
+      return {lat,lng};
+    }
+    const segLen=view.getUint16(offset+2);
+    offset+=2+segLen;
+  }
+  return null;
+}
+
+// ── ローカル写真マーカー追加 ──
+const previewIcon=L.divIcon({className:'preview-marker',
+  html:`<div style="width:22px;height:22px;background:rgba(220,60,60,.92);border:2px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,.5);cursor:pointer;">
+    <svg width="11" height="11" fill="white" viewBox="0 0 20 20"><circle cx="10" cy="8" r="4.5"/><path d="M10 12.5l-3.5 6h7z"/></svg></div>`,
+  iconAnchor:[11,11]});
+
+async function loadLocalPhotos(files){
+  if(!files||!files.length) return;
+  let added=0, skipped=0;
+  const op=Number(document.querySelector('.oc-slider.photo').value)/100;
+
+  for(const file of files){
+    const buf=await file.arrayBuffer();
+    const gps=readExifGPS(buf);
+    if(!gps){skipped++;continue;}
+
+    // ObjectURL でサムネとして使用
+    const url=URL.createObjectURL(file);
+    const name=file.name.replace(/\.[^.]+$/,'');
+    const m=L.marker([gps.lat,gps.lng],{icon:previewIcon}).addTo(map);
+    m.getElement().style.opacity=op;
+    m.bindPopup(`<div class="mp">
+      <h4>🔴 ${name}<br><span style="font-size:10px;color:var(--text3)">(プレビュー・未保存)</span></h4>
+      <p>GPS: ${gps.lat.toFixed(5)}, ${gps.lng.toFixed(5)}</p>
+      <button onclick="openPreviewVR('${url}','${name}')">🥽 VRで確認</button>
+      <button style="margin-top:4px;background:rgba(180,50,50,.8);" onclick="removePreviewMarker(this,${gps.lat},${gps.lng})">✕ 削除</button>
+    </div>`,{closeButton:false});
+    photoMarkers.push(m);
+    added++;
+  }
+  const msg=`プレビュー追加: ${added}枚${skipped?' (GPS未検出: '+skipped+'枚)':''}`;
+  showErr(msg.replace('プレビュー','✓ プレビュー'));
+}
+
+function openPreviewVR(url,name){
+  if(vrV){try{vrV.destroy();}catch(e){}vrV=null;}
+  vrQ=[{id:'preview',url,title:name,lat:0,lng:0,date:'プレビュー',time:''}];vrI=0;
+  document.getElementById('vr-modal').classList.add('open');
+  buildV(vrQ[0]);
+  if(map)map.closePopup();
+}
+
+function removePreviewMarker(btn,lat,lng){
+  // popup内のボタンからマーカーを特定して削除
+  const popup=btn.closest('.leaflet-popup');
+  if(popup){
+    // マーカーを検索して削除
+    const idx=photoMarkers.findIndex(m=>{
+      const ll=m.getLatLng();
+      return Math.abs(ll.lat-lat)<0.00001&&Math.abs(ll.lng-lng)<0.00001;
+    });
+    if(idx>=0){map.removeLayer(photoMarkers[idx]);photoMarkers.splice(idx,1);}
+    map.closePopup();
+  }
+}
+
+// GISレイヤのリスト（スライダー用）
+// {layer, baseStroke, baseFill, type} の形で登録
+let gisLayerList=[];
+
+// 現在の各タイプの不透明度（0〜1）
+const layerOpacity={comp:0.70, sub:1.0, road:1.0};
+
+function setLayerOpacity(type, val){
+  if(type==='photo'){setPhotoOpacity(val);return;}
+  const t=Number(val)/100;
+  layerOpacity[type]=t;
+  document.getElementById('val-'+type).textContent=val+'%';
+  gisLayerList.forEach(item=>{
+    if(item.type!==type) return;
+    item.layer.eachLayer(l=>{
+      if(type==='comp'){
+        // 林班はfillも枠線もまとめて
+        l.setStyle({
+          opacity:     item.baseStroke * t,
+          fillOpacity: item.baseFill   * t,
+        });
+      } else {
+        // 小班・林道は枠線（stroke）のみ
+        l.setStyle({opacity: t, fillOpacity: 0});
+      }
+    });
+  });
+}
+
+loadAll();
+</script>
+</body>
+</html>
