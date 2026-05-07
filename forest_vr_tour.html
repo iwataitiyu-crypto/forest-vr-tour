@@ -598,10 +598,13 @@ async function enterVRMode(){
 }
 
 function checkWebXR(){
+  const btn=document.getElementById('enter-xr-btn');
+  if(!btn) return;
+  const isQuest=navigator.userAgent.includes('Quest')||navigator.userAgent.includes('OculusBrowser');
+  if(isQuest){btn.style.display='block';return;}
   if(navigator.xr){
     navigator.xr.isSessionSupported('immersive-vr').then(supported=>{
-      const btn=document.getElementById('enter-xr-btn');
-      if(btn) btn.style.display=supported?'block':'none';
+      btn.style.display=supported?'block':'none';
     });
   }
 }
