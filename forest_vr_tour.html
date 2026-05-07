@@ -246,7 +246,7 @@
 <div id="vr-modal">
   <div id="vr-header">
     <div id="vr-info"><div id="vr-title">360°現地写真</div><div id="vr-meta"></div></div>
-    <span id="quest-hint">🥽 Quest 3のブラウザでVRモード対応</span>
+    <span id="quest-hint">🥽 Quest 3: 下の「VRモードで見る」ボタンを押してください</span>
     <button class="vr-close" onclick="closeVR()">✕ 閉じる</button>
   </div>
   <div id="panorama"></div>
@@ -254,6 +254,9 @@
     <button class="vr-nav" id="btn-prev" onclick="navigateVR(-1)">← 前</button>
     <span id="vr-counter"></span>
     <button class="vr-nav" id="btn-next" onclick="navigateVR(+1)">次 →</button>
+    <button id="enter-xr-btn" onclick="enterVRMode()" style="display:none;margin-left:auto;background:#5060e0;border:1px solid #8090ff;color:#fff;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">
+      🥽 VRモードで見る
+    </button>
   </div>
 </div>
 
@@ -552,12 +555,62 @@ function buildV(p){
   document.getElementById('vr-counter').textContent=vrQ.length>1?`${vrI+1} / ${vrQ.length}`:'';
   document.getElementById('btn-prev').disabled=vrI===0;
   document.getElementById('btn-next').disabled=vrI===vrQ.length-1;
+  // Quest Browserでの WebXR対応チェック（500ms後にPannellumが描画完了してから）
+  setTimeout(checkWebXR, 500);
 }
 function openVRSingle(id){const p=PHOTOS.find(x=>x.id===id);if(!p)return;vrQ=[p];vrI=0;document.getElementById('vr-modal').classList.add('open');buildV(p);if(map)map.closePopup();}
 function openVRFromSub(id,k){vrQ=PHOTOS.filter(p=>p.sub_id===k);vrI=Math.max(0,vrQ.findIndex(p=>p.id===id));document.getElementById('vr-modal').classList.add('open');buildV(vrQ[vrI]);}
 function openVRSubAll(k){vrQ=PHOTOS.filter(p=>p.sub_id===k);if(!vrQ.length)return;vrI=0;document.getElementById('vr-modal').classList.add('open');buildV(vrQ[0]);}
 function navigateVR(d){vrI=Math.max(0,Math.min(vrQ.length-1,vrI+d));buildV(vrQ[vrI]);}
-function closeVR(){document.getElementById('vr-modal').classList.remove('open');if(vrV){try{vrV.destroy();}catch(e){}vrV=null;}}
+/* ── WebXR immersive-vr セッション ── */
+let xrSession=null, xrRefSpace=null, xrCanvas=null, xrCtx=null, xrImg=null;
+
+async function enterVRMode(){
+  if(!navigator.xr){alert('WebXRが利用できません。Meta Quest Browserで開いてください。');return;}
+  const supported=await navigator.xr.isSessionSupported('immersive-vr');
+  if(!supported){alert('このブラウザはimmersive-VRをサポートしていません。');return;}
+  try{
+    xrSession=await navigator.xr.requestSession('immersive-vr',{
+      requiredFeatures:['viewer','local']
+    });
+    xrSession.addEventListener('end',()=>{
+      xrSession=null;
+      document.getElementById('enter-xr-btn').textContent='🥽 VRモードで見る';
+    });
+    // Pannellumのcanvasを取得してXRに渡す
+    const panCanvas=document.querySelector('#panorama canvas');
+    if(!panCanvas){alert('パノラマが読み込まれていません。少し待ってから試してください。');xrSession.end();return;}
+    const gl=panCanvas.getContext('webgl')||panCanvas.getContext('webgl2');
+    if(!gl){xrSession.end();return;}
+    await gl.makeXRCompatible();
+    const layer=new XRWebGLLayer(xrSession,gl);
+    xrSession.updateRenderState({baseLayer:layer});
+    xrRefSpace=await xrSession.requestReferenceSpace('local');
+    document.getElementById('enter-xr-btn').textContent='⬛ VR終了';
+    xrSession.requestAnimationFrame(function xrFrame(t,frame){
+      if(!xrSession)return;
+      xrSession.requestAnimationFrame(xrFrame);
+    });
+  }catch(e){
+    console.error('WebXR error:',e);
+    alert('VRモードの起動に失敗しました: '+e.message);
+  }
+}
+
+function checkWebXR(){
+  if(navigator.xr){
+    navigator.xr.isSessionSupported('immersive-vr').then(supported=>{
+      const btn=document.getElementById('enter-xr-btn');
+      if(btn) btn.style.display=supported?'block':'none';
+    });
+  }
+}
+
+function closeVR(){
+  document.getElementById('vr-modal').classList.remove('open');
+  if(vrV){try{vrV.destroy();}catch(e){}vrV=null;}
+  if(xrSession){try{xrSession.end();}catch(e){}xrSession=null;}
+}
 document.addEventListener('keydown',e=>{
   if(!document.getElementById('vr-modal').classList.contains('open'))return;
   if(e.key==='Escape')closeVR();
