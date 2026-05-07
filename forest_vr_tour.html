@@ -246,11 +246,8 @@
 <!-- VR Modal -->
 <!-- A-Frame 没入型VRシーン（普段は非表示） -->
 <div id="aframe-wrap" style="display:none;position:fixed;inset:0;z-index:3000;">
-  <!-- VR内オーバーレイ（CJK対応・5秒表示してフェードアウト） -->
-  <div id="vr-info-overlay" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:3200;background:rgba(0,0,0,.78);padding:18px 28px;border-radius:14px;color:#d8e8c8;text-align:center;border:1px solid rgba(120,180,80,.3);min-width:320px;max-width:560px;pointer-events:none;opacity:0;transition:opacity .4s ease-in-out;display:none;">
-    <div id="vr-info-title" style="font-size:18px;font-weight:600;color:#d8e8c8;margin-bottom:6px;line-height:1.4;"></div>
-    <div id="vr-info-meta" style="font-size:14px;color:#9ab880;line-height:1.5;"></div>
-  </div>
+  <!-- 隠しCanvas: 日本語テキスト描画用（A-Frameのテクスチャとして使う） -->
+  <canvas id="overlay-canvas" width="1024" height="256" style="display:none;"></canvas>
   <a-scene id="aframe-scene"
     embedded
     style="width:100%;height:100%;"
@@ -261,7 +258,14 @@
 
     <!-- カメラリグ -->
     <a-entity id="camera-rig">
-      <a-entity id="aframe-cam" camera look-controls="pointerLockEnabled:false" position="0 1.6 0"></a-entity>
+      <a-entity id="aframe-cam" camera look-controls="pointerLockEnabled:false" position="0 1.6 0">
+        <!-- 視線正面に表示する情報パネル（カメラに追従） -->
+        <a-plane id="info-plane"
+          position="0 -0.3 -1.5"
+          width="1.6" height="0.4"
+          material="transparent:true; opacity:0; src:#overlay-canvas"
+          visible="false"></a-plane>
+      </a-entity>
     </a-entity>
 
     <!-- 右コントローラー -->
@@ -647,15 +651,49 @@ AFRAME.registerComponent('vr-exit-button', {
   }
 });
 
-// ── 写真情報オーバーレイ（5秒表示→1.5秒フェードアウト・CJK対応） ──
-let overlayTimer=null, overlayHideTimer=null;
-function showInfoOverlay(photo){
-  const overlay=document.getElementById('vr-info-overlay');
-  const title=document.getElementById('vr-info-title');
-  const meta=document.getElementById('vr-info-meta');
-  if(!overlay||!title||!meta) return;
+// ── 写真情報オーバーレイ（CanvasでCJK描画してA-Frameテクスチャに貼る） ──
+let overlayTimer=null, overlayHideTimer=null, overlayFadeTimer=null;
 
-  // 小班情報を取得（樹種・林齢など）
+function drawOverlayCanvas(titleText, metaText){
+  const cv=document.getElementById('overlay-canvas');
+  if(!cv) return;
+  const ctx=cv.getContext('2d');
+  const W=cv.width, H=cv.height;
+  ctx.clearRect(0,0,W,H);
+
+  // 背景（角丸の半透明黒）
+  ctx.fillStyle='rgba(0,0,0,0.78)';
+  const r=20;
+  ctx.beginPath();
+  ctx.moveTo(r,0); ctx.lineTo(W-r,0); ctx.quadraticCurveTo(W,0,W,r);
+  ctx.lineTo(W,H-r); ctx.quadraticCurveTo(W,H,W-r,H);
+  ctx.lineTo(r,H); ctx.quadraticCurveTo(0,H,0,H-r);
+  ctx.lineTo(0,r); ctx.quadraticCurveTo(0,0,r,0);
+  ctx.closePath(); ctx.fill();
+
+  // 枠線
+  ctx.strokeStyle='rgba(120,180,80,0.4)';
+  ctx.lineWidth=2;
+  ctx.stroke();
+
+  // タイトル（白っぽい緑、太字）
+  ctx.fillStyle='#d8e8c8';
+  ctx.font='bold 38px "Noto Sans JP","Yu Gothic","Meiryo",sans-serif';
+  ctx.textAlign='center';
+  ctx.textBaseline='middle';
+  ctx.fillText(titleText, W/2, 80);
+
+  // メタ情報（薄緑）
+  ctx.fillStyle='#9ab880';
+  ctx.font='28px "Noto Sans JP","Yu Gothic","Meiryo",sans-serif';
+  ctx.fillText(metaText, W/2, 165);
+}
+
+function showInfoOverlay(photo){
+  const plane=document.getElementById('info-plane');
+  if(!plane) return;
+
+  // 小班情報を取得
   let extraInfo='';
   if(photo.sub_id && SUBS_GJ){
     const [compId,subLbl]=photo.sub_id.split('-');
@@ -673,29 +711,47 @@ function showInfoOverlay(photo){
       if(parts.length) extraInfo=' ｜ '+parts.join(' ・ ');
     }
   }
+  const titleText = photo.title||photo.filename||photo.id;
+  const metaText  = `${photo.date||''} ${photo.time||''}${extraInfo}`;
 
-  title.textContent = photo.title||photo.filename||photo.id;
-  meta.textContent  = `${photo.date||''} ${photo.time||''}${extraInfo}`;
+  // Canvasに描画
+  drawOverlayCanvas(titleText, metaText);
 
   // タイマークリア
   if(overlayTimer)     clearTimeout(overlayTimer);
   if(overlayHideTimer) clearTimeout(overlayHideTimer);
+  if(overlayFadeTimer) clearTimeout(overlayFadeTimer);
 
-  // 表示・フェードイン
-  overlay.style.display='block';
-  // 表示直後にtransitionで滑らかにフェードイン
-  requestAnimationFrame(()=>{
-    overlay.style.transition='opacity .4s ease-in-out';
-    overlay.style.opacity='1';
-  });
+  // テクスチャ更新を強制（src変更で再ロード）
+  plane.setAttribute('visible','true');
+  plane.setAttribute('material','transparent:true; opacity:0; src:#overlay-canvas');
+  // Three.jsレベルでテクスチャを更新（重要：Canvas変更を反映）
+  setTimeout(()=>{
+    const mesh=plane.getObject3D('mesh');
+    if(mesh && mesh.material && mesh.material.map){
+      mesh.material.map.needsUpdate=true;
+    }
+    // フェードイン
+    plane.setAttribute('animation__in',
+      'property:components.material.material.opacity; from:0; to:1; dur:400');
+    // 上記アニメーションが効かない場合のフォールバック
+    plane.setAttribute('material','transparent:true; opacity:1; src:#overlay-canvas');
+  },50);
 
-  // 5秒後にフェードアウト
+  // 5秒表示後フェードアウト
   overlayTimer=setTimeout(()=>{
-    overlay.style.transition='opacity 1.5s ease-in-out';
-    overlay.style.opacity='0';
-    overlayHideTimer=setTimeout(()=>{
-      overlay.style.display='none';
-    }, 1600);
+    let op=1.0;
+    overlayFadeTimer=setInterval(()=>{
+      op-=0.05;
+      if(op<=0){
+        clearInterval(overlayFadeTimer);
+        plane.setAttribute('visible','false');
+        return;
+      }
+      plane.setAttribute('material',`transparent:true; opacity:${op}; src:#overlay-canvas`);
+      const mesh=plane.getObject3D('mesh');
+      if(mesh && mesh.material) mesh.material.opacity=op;
+    },80); // 80ms × 20回 = 約1.6秒でフェード
   }, 5000);
 }
 
